@@ -65,6 +65,15 @@ struct {
 	bool quit;
 } GameCtx;
 
+/* used to determine the next square when jumping */
+typedef
+enum {
+	NW,
+	NE,
+	SW,
+	SE,
+} DIRECTION;
+
 /*
 	utility functions for the linked list
 */
@@ -73,6 +82,8 @@ movelist_append(MoveList **mvlstptr, Move m){
 	if (*mvlstptr == NULL) {
 		(*mvlstptr) = MOVELIST_MALLOC;
 		(*mvlstptr)->value = m;
+		for (int i = 0; i<m.taken_len; ++i)
+			((*mvlstptr)->value).taken[i] = m.taken[i];
 		(*mvlstptr)->next  = NULL;
 	}
 	else {
@@ -81,6 +92,8 @@ movelist_append(MoveList **mvlstptr, Move m){
 			ptr = ptr->next;
 		ptr->next = MOVELIST_MALLOC;
 		ptr->next->value = m;
+		for (int i = 0; i<m.taken_len; ++i)
+			ptr->next->value.taken[i] = m.taken[i];
 		ptr->next->next  = NULL;
 	}
 }
@@ -172,8 +185,8 @@ adjacent_squares(uint8_t square, uint8_t squares[4], bool isking){
 		}
 		squares[0] = square - 5 > 0 ? square - 5 : 0;
 		squares[1] = square - 4 > 0 ? square - 4 : 0;
-		squares[2] = ( ( square + 3 < 32 && isking ) ) ? square + 3 : 0;
-		squares[3] = ( ( square + 4 < 32 && isking ) ) ? square + 4 : 0;
+		squares[2] = ( ( square + 3 <= 32 && isking ) ) ? square + 3 : 0;
+		squares[3] = ( ( square + 4 <= 32 && isking ) ) ? square + 4 : 0;
 	}
 	// odd rows
 	else {
@@ -187,8 +200,73 @@ adjacent_squares(uint8_t square, uint8_t squares[4], bool isking){
 		}
 		squares[0] = square - 4 > 0 ? square - 4 : 0;
 		squares[1] = square - 3 > 0 ? square - 3 : 0;
-		squares[2] = ( ( square + 4 < 32 && isking ) ) ? square + 4 : 0;
-		squares[3] = ( ( square + 5 < 32 && isking ) ) ? square + 5 : 0;
+		squares[2] = ( ( square + 4 <= 32 && isking ) ) ? square + 4 : 0;
+		squares[3] = ( ( square + 5 <= 32 && isking ) ) ? square + 5 : 0;
+	}
+}
+
+/*
+	returns the index of the square opposite to the one
+	given in the "square" argument
+	the "d" argument is used to determine which direction we
+	want to find the opposing square
+	"isking" argument speaks for itself
+*/
+uint8_t
+opposing_square(uint8_t square, DIRECTION d, bool isking) {
+	// even rows
+	if ( ! ( ( square/4 + ( (square%4) > 0 ) ) % 2 ) ){
+		// edge
+		if ( square % 4 == 1 ){
+			switch (d) {
+			case NE:
+				return square - 4;
+			case SE:
+				return isking ? square + 4 : 0;
+			default:
+				return 0;
+			}
+		}
+		switch (d) {
+		case NW:
+			return square - 5 > 0 ? square - 5 : 0;
+		case NE:
+			return square - 4 > 0 ? square - 4 : 0;
+		case SW:
+			return ( ( square + 3 <= 32 && isking ) ) ? square + 3 : 0;
+		case SE:
+			return ( ( square + 4 <= 32 && isking ) ) ? square + 4 : 0;
+		// unreachable
+		default:
+			return 0;
+		}
+	}
+	// odd rows
+	else {
+		// edge
+		if ( square % 4 == 0 ){
+			switch (d) {
+			case NW:
+				return square - 4;
+			case SW:
+				return isking ? square + 4 : 0;
+			default:
+				return 0;
+			}
+		}
+		switch (d) {
+		case NW:
+			return square - 4 > 0 ? square - 4 : 0;
+		case NE:
+			return square - 3 > 0 ? square - 3 : 0;
+		case SW:
+			return ( ( square + 4 <= 32 && isking ) ) ? square + 4 : 0;
+		case SE:
+			return ( ( square + 5 <= 32 && isking ) ) ? square + 5 : 0;
+		// unreachable
+		default:
+			return 0;
+		}
 	}
 }
 
@@ -343,11 +421,22 @@ available_moves(char board[32], uint8_t square, MoveList **mvlstptr){
 	adjacent_squares(square, adj_squares, ISUPPERCASE(board[square]));
 	Move m;
 	for (int i = 0; i<4; ++i){
-		if (adj_squares[i] && board[adj_squares[i]-1] == ' '){
-			m.from = square;
-			m.to = adj_squares[i];
-			m.taken_len = 0;
-			movelist_append(mvlstptr, m);
+		if (adj_squares[i]){
+			if (board[adj_squares[i]-1] == ' '){
+				m.from = square;
+				m.to = adj_squares[i];
+				m.taken_len = 0;
+				movelist_append(mvlstptr, m);
+			}
+			else if (board[adj_squares[i]-1] != board[square-1]){
+				m.from = square;
+				uint8_t opp_sqr = opposing_square(adj_squares[i], i, ISUPPERCASE(board[square-1]));
+				printf("%d\n", opp_sqr);
+				m.to = opp_sqr;
+				m.taken_len = 1;
+				m.taken[m.taken_len-1] = adj_squares[i];
+				movelist_append(mvlstptr, m);
+			}
 		}
 	}
 }
@@ -594,6 +683,12 @@ main(int argc, char *argv[]){
 	   0 - black piece
 	   1 - white piece
 	*/
+
+	printf("Opposing square to 21 (NW, false): %d\n", opposing_square(21, NW, false) );
+	printf("Opposing square to 21 (NE, false): %d\n", opposing_square(21, NE, false) );
+	printf("Opposing square to 22 (SW, false): %d\n", opposing_square(22, SW, false) );
+	printf("Opposing square to 22 (SW, true): %d\n", opposing_square(22, SW, true) );
+
 	GameCtx gmctx;
 
 	uint8_t neighbors[4];
