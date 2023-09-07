@@ -1,3 +1,6 @@
+// Don't forget:
+// bitfilter for directions - function -> determined by the value at the position on board
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -16,6 +19,70 @@
 #define ISDIGIT(x)	('1' <= x && x <= '8')
 #define ISALPHA(x)	( ('a' <= x && x <= 'h') || ('A' <= x && x <= 'H') )
 #define ISUPPERCASE(x)  ( x >= 'A' && x <= 'Z' )
+
+/* GAME MACROS */
+
+/*
+	returns the index of the square opposite to the one
+	given in the "square" argument
+	the "d" argument is used to determine which direction we
+	want to find the opposing square
+*/
+#define OPPOSING_SQUARE(S, D) ADJ_SQUARES[[ADJ_SQUARES[S-1][S] - 1]][S]
+
+/* copies a 4 "item" array into another */
+#define 4BYTECOPY(FROM, TO) do { for (int i = 0; i<4; ++i) { FROM[i] = TO[i]; } } while (false);
+
+/* GAME CONSTANTS */
+
+/*
+	__1-__2-__3-__4-
+	5-__6-__7-__8-__
+	__9-__10__11__12
+	13__14__15__16__
+	__17__18__19__20
+	21__22__23__24__
+	__25__26__27__28
+	29__30__31__32__
+*/
+
+/*
+	a 4 byte array with the squares adjacent to the square "index"+1
+	in NW NE SW SE order.
+	if there is no square to be found in a direction, it is set to 0
+*/
+const uint8_t ADJ_SQUARES[32][4] {
+		{ 0, 0, 5, 6 },
+		{ 0, 0, 6, 7 },
+		{ 0, 0, 7, 8 },
+		{ 1, 2, 9, 10 },
+		{ 2, 3, 10, 11 },
+		{ 3, 4, 11, 12 },
+		{ 5, 6, 13, 14 },
+		{ 6, 7, 14, 15 },
+		{ 7, 8, 15, 16 },
+		{ 9, 10, 17, 18 },
+		{ 10, 11, 18, 19 },
+		{ 11, 12, 19, 20 },
+		{ 13, 14, 21, 22 },
+		{ 14, 15, 22, 23 },
+		{ 15, 16, 23, 24 },
+		{ 17, 18, 25, 26 },
+		{ 18, 19, 26, 27 },
+		{ 19, 20, 27, 28 },
+		{ 21, 22, 29, 30 },
+		{ 22, 23, 30, 31 },
+		{ 23, 24, 31, 32 },
+		{ 25, 26, 0, 0 },
+		{ 26, 27, 0, 0 },
+		{ 27, 28, 0, 0 }
+}
+
+
+/* ANSI ESCAPE CODES */
+#define ANSI_HIGHLIGHT "\033[7m"
+#define ANSI_CLEAR     "\033[0m"
+#define ANSI_YELLOW    "\033[30;103m"
 
 /* MOVELIST */
 #define MOVELIST_MALLOC ((MoveList *) malloc(sizeof(MoveList)))
@@ -150,123 +217,28 @@ movelist_contains(MoveList *mvlstptr, Move m, bool ignore_taken){
 	}
 }
 
-/* ANSI ESCAPE CODES */
-#define ANSI_HIGHLIGHT "\033[7m"
-#define ANSI_CLEAR     "\033[0m"
-#define ANSI_YELLOW    "\033[30;103m"
-
-/*
-	__1-__2-__3-__4-
-	5-__6-__7-__8-__
-	__9-__10__11__12
-	13__14__15__16__
-	__17__18__19__20
-	21__22__23__24__
-	__25__26__27__28
-	29__30__31__32__
-*/
-
-/*
-	fills up a 4 byte array with the squares adjacent to "square"
-	in NW NE SW SE order.
-	if there is no square to be found in a direction, it's value will be set to 0
+/* 
+   writes into an array of booleans of length 4.
+   (NW, NE, SW, SE)
+   true means the piece is allowed to move in that direction
 */
 void
-adjacent_squares(uint8_t square, uint8_t squares[4], bool isking){
-	// even rows
-	if ( ! ( ( square/4 + ( (square%4) > 0 ) ) % 2 ) ){
-		// edge
-		if ( square % 4 == 1 ){
-			squares[0] = 0;
-			squares[1] = square - 4;
-			squares[2] = 0;
-			squares[3] = isking ? square + 4 : 0;
-			return;
-		}
-		squares[0] = square - 5 > 0 ? square - 5 : 0;
-		squares[1] = square - 4 > 0 ? square - 4 : 0;
-		squares[2] = ( ( square + 3 <= 32 && isking ) ) ? square + 3 : 0;
-		squares[3] = ( ( square + 4 <= 32 && isking ) ) ? square + 4 : 0;
+direction_filter(GameCtx &gmctx, uint8_t square, bool filter[4]){
+	char piece = (gmctx->board)[square-1];
+	
+	if (ISUPPERCASE(piece))
+		for (int i = 0; i<4; ++i) filter[i]= true;
+	else if (piece == 'b'){
+		filter[0] = false;
+		filter[1] = false;
+		filter[2] = true;
+		filter[3] = true;
 	}
-	// odd rows
 	else {
-		// edge
-		if ( square % 4 == 0 ){
-			squares[0] = square - 4;
-			squares[1] = 0;
-			squares[2] = isking ? square + 4 : 0;
-			squares[3] = 0;
-			return;
-		}
-		squares[0] = square - 4 > 0 ? square - 4 : 0;
-		squares[1] = square - 3 > 0 ? square - 3 : 0;
-		squares[2] = ( ( square + 4 <= 32 && isking ) ) ? square + 4 : 0;
-		squares[3] = ( ( square + 5 <= 32 && isking ) ) ? square + 5 : 0;
-	}
-}
-
-/*
-	returns the index of the square opposite to the one
-	given in the "square" argument
-	the "d" argument is used to determine which direction we
-	want to find the opposing square
-	"isking" argument speaks for itself
-*/
-uint8_t
-opposing_square(uint8_t square, DIRECTION d, bool isking) {
-	// even rows
-	if ( ! ( ( square/4 + ( (square%4) > 0 ) ) % 2 ) ){
-		// edge
-		if ( square % 4 == 1 ){
-			switch (d) {
-			case NE:
-				return square - 4;
-			case SE:
-				return isking ? square + 4 : 0;
-			default:
-				return 0;
-			}
-		}
-		switch (d) {
-		case NW:
-			return square - 5 > 0 ? square - 5 : 0;
-		case NE:
-			return square - 4 > 0 ? square - 4 : 0;
-		case SW:
-			return ( ( square + 3 <= 32 && isking ) ) ? square + 3 : 0;
-		case SE:
-			return ( ( square + 4 <= 32 && isking ) ) ? square + 4 : 0;
-		// unreachable
-		default:
-			return 0;
-		}
-	}
-	// odd rows
-	else {
-		// edge
-		if ( square % 4 == 0 ){
-			switch (d) {
-			case NW:
-				return square - 4;
-			case SW:
-				return isking ? square + 4 : 0;
-			default:
-				return 0;
-			}
-		}
-		switch (d) {
-		case NW:
-			return square - 4 > 0 ? square - 4 : 0;
-		case NE:
-			return square - 3 > 0 ? square - 3 : 0;
-		case SW:
-			return ( ( square + 4 <= 32 && isking ) ) ? square + 4 : 0;
-		case SE:
-			return ( ( square + 5 <= 32 && isking ) ) ? square + 5 : 0;
-		// unreachable
-		default:
-			return 0;
-		}
+		filter[0] = true;
+		filter[1] = true;
+		filter[2] = false;
+		filter[3] = false;
 	}
 }
 
@@ -416,21 +388,28 @@ movelist_print(MoveList *mvlstptr) {
 	here's the meat: the --MOVES--
 */
 void
-available_moves(char board[32], uint8_t square, MoveList **mvlstptr){
+available_moves(GameCtx &gmctx, uint8_t square, MoveList **mvlstptr){
+
 	uint8_t adj_squares[4];
-	adjacent_squares(square, adj_squares, ISUPPERCASE(board[square]));
+	bool dir_filter[4];
+
+	4BYTECOPY(ADJ_SQUARES[square-1], adj_squares);
+
+	direction_filter(gmctx, square, dir_filter);
+
 	Move m;
+
 	for (int i = 0; i<4; ++i){
-		if (adj_squares[i]){
-			if (board[adj_squares[i]-1] == ' '){
+		if (dir_filter[i]){
+			if ((gmctx->board)[adj_squares[i]-1] == ' '){
 				m.from = square;
 				m.to = adj_squares[i];
 				m.taken_len = 0;
 				movelist_append(mvlstptr, m);
 			}
-			else if (board[adj_squares[i]-1] != board[square-1]){
+			else if ((gmctx->board)[adj_squares[i]-1] != (gmctx->board)[square-1]){
 				m.from = square;
-				uint8_t opp_sqr = opposing_square(adj_squares[i], i, ISUPPERCASE(board[square-1]));
+				uint8_t opp_sqr = OPPOSING_SQUARE(adj_squares[i]);
 				printf("%d\n", opp_sqr);
 				m.to = opp_sqr;
 				m.taken_len = 1;
@@ -678,17 +657,6 @@ parse_cmd(GameCtx *gmctx, char cmd[6], bool *error) {
 int
 main(int argc, char *argv[]){
 
-	/* 
-	   32 bit value to represent the 32 squares used in the game
-	   0 - black piece
-	   1 - white piece
-	*/
-
-	printf("Opposing square to 21 (NW, false): %d\n", opposing_square(21, NW, false) );
-	printf("Opposing square to 21 (NE, false): %d\n", opposing_square(21, NE, false) );
-	printf("Opposing square to 22 (SW, false): %d\n", opposing_square(22, SW, false) );
-	printf("Opposing square to 22 (SW, true): %d\n", opposing_square(22, SW, true) );
-
 	GameCtx gmctx;
 
 	uint8_t neighbors[4];
@@ -697,6 +665,7 @@ main(int argc, char *argv[]){
 	char cmd[8];
 	
 	gmctx.movelist = NULL;
+	MoveList *available;
 
 	while (!gmctx.quit){
 		putc('>',stdout);
@@ -705,9 +674,10 @@ main(int argc, char *argv[]){
 		bool error;
 		Move move = parse_cmd(&gmctx, cmd, &error);
 		if (move.from){
-			movelist_append(&(gmctx.movelist), move);
-			do_move(gmctx.board, move);
-			print_board(gmctx.board);
+			available_moves(&gmctx, move.from);
+			//movelist_append(&(gmctx.movelist), move);
+			//do_move(gmctx.board, move);
+			//print_board(gmctx.board);
 		}
 		memset(cmd, 0, sizeof cmd);
 	}
