@@ -1,4 +1,5 @@
-// Note to self: gdb it
+// Note to self:
+// make "MoveList *available_moves" part of GameCtx
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -127,7 +128,6 @@ move_equal(Move m1, Move m2, bool ignore_taken){
 /* Copies one Move into the other */
 void
 move_copy(Move m_from, Move *m_to){
-	printf("move_copy()\n");
 	m_to->from = m_from.from;
 	m_to->to   = m_from.to;
 	m_to->taken_len = m_from.taken_len;
@@ -409,8 +409,6 @@ movelist_print(MoveList *mvlstptr) {
 void
 recursive_take(GameCtx *gmctx, uint8_t square, Move *m, MoveList **mvlstptr, DIRECTION d, bool dir_filter[4]){
 
-	printf("line 409: recursive_take() entered\n");
-	
 	uint8_t adj_squares[4];
 
 	FOURBYTECOPY(ADJ_SQUARES[square-1], adj_squares);
@@ -471,17 +469,15 @@ available_moves(GameCtx *gmctx, uint8_t square, MoveList **mvlstptr){
 	direction_filter(gmctx, square, dir_filter);
 
 	Move m;
+    m.taken_len = 0;
 
 	for (int i = 0; i<4; ++i){
 
 		if (!dir_filter[i] || !(adj_squares[i])) continue;
 
-		printf("Checking direction %d\n", i);
-
 		if ((gmctx->board)[adj_squares[i]-1] == ' '){
 			m.from = square;
 			m.to = adj_squares[i];
-			m.taken_len = 0;
 			movelist_append(mvlstptr, m);
 		}
 		else if ((gmctx->board)[adj_squares[i]-1] != (gmctx->board)[square-1]){
