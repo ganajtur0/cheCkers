@@ -1,5 +1,5 @@
 // Note to self:
-// make "MoveList *available_moves" part of GameCtx
+// fix "do_moves" to check if the move is available. probably need to add more stuff to gmctx. smh my head
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -147,6 +147,7 @@ typedef
 struct {
 	char board[32];
 	MoveList *movelist;
+	MoveList *available_moves;
 	bool quit;
 } GameCtx;
 
@@ -407,7 +408,7 @@ movelist_print(MoveList *mvlstptr) {
 */
 
 void
-recursive_take(GameCtx *gmctx, uint8_t square, Move *m, MoveList **mvlstptr, DIRECTION d, bool dir_filter[4]){
+recursive_take(GameCtx *gmctx, uint8_t square, Move *m, DIRECTION d, bool dir_filter[4]){
 
 	uint8_t adj_squares[4];
 
@@ -435,18 +436,18 @@ recursive_take(GameCtx *gmctx, uint8_t square, Move *m, MoveList **mvlstptr, DIR
 					Move new_m;
 					move_copy(*m, &new_m);
 
-					recursive_take(gmctx, opp_sqr, &new_m, mvlstptr, i, dir_filter );
+					recursive_take(gmctx, opp_sqr, &new_m, i, dir_filter );
 
 					new_m.to = opp_sqr;
-					movelist_append(mvlstptr, new_m);
+					movelist_append( &(gmctx->available_moves), new_m);
 
 				}
 				else {
 					// we recurse (plz don't smash the stack)
-					recursive_take(gmctx, opp_sqr, m, mvlstptr, i, dir_filter);
+					recursive_take(gmctx, opp_sqr, m, i, dir_filter);
 					
 					m->to = opp_sqr;
-					movelist_append(mvlstptr, *m);
+					movelist_append( &(gmctx->available_moves), *m);
 					
 				}
 
@@ -456,7 +457,7 @@ recursive_take(GameCtx *gmctx, uint8_t square, Move *m, MoveList **mvlstptr, DIR
 }
 
 void
-available_moves(GameCtx *gmctx, uint8_t square, MoveList **mvlstptr){
+available_moves(GameCtx *gmctx, uint8_t square){
 	
 	if ((gmctx->board)[square-1] == ' ')
 		return;
@@ -469,7 +470,7 @@ available_moves(GameCtx *gmctx, uint8_t square, MoveList **mvlstptr){
 	direction_filter(gmctx, square, dir_filter);
 
 	Move m;
-    m.taken_len = 0;
+    	m.taken_len = 0;
 
 	for (int i = 0; i<4; ++i){
 
@@ -478,7 +479,7 @@ available_moves(GameCtx *gmctx, uint8_t square, MoveList **mvlstptr){
 		if ((gmctx->board)[adj_squares[i]-1] == ' '){
 			m.from = square;
 			m.to = adj_squares[i];
-			movelist_append(mvlstptr, m);
+			movelist_append( &(gmctx->available_moves), m);
 		}
 		else if ((gmctx->board)[adj_squares[i]-1] != (gmctx->board)[square-1]){
 			uint8_t opp_sqr = OPPOSING_SQUARE(square, i);
@@ -488,7 +489,7 @@ available_moves(GameCtx *gmctx, uint8_t square, MoveList **mvlstptr){
 				m.taken[m.taken_len-1] = adj_squares[i];
 
 				// we recurse (plz don't smash the stack)
-				recursive_take(gmctx, opp_sqr, &m, mvlstptr, i, dir_filter);
+				recursive_take(gmctx, opp_sqr, &m, i, dir_filter);
 			}
 		}
 		for (int j = 0; j<m.taken_len; ++j)
@@ -497,11 +498,32 @@ available_moves(GameCtx *gmctx, uint8_t square, MoveList **mvlstptr){
 	}
 }
 
-void
+bool
 do_move(GameCtx *gmctx, Move m){
+
+	// check if the move is legal -> if it's in the available_moves list
+	MoveList *current = gmctx->available_moves;
+	printf("%p\n", current);
+
+	bool valid = false;
+
+	while (current != NULL) {
+		move_print(current->value);
+		printf("yes papi\n");
+		current = current->next;
+		if ( move_equal(current->value, m, true) ) {
+			valid = true;
+			break;
+		}
+	}
+
+	if (!valid) return false;
+
 	movelist_append(&(gmctx->movelist), m);
 	(gmctx->board)[m.to - 1] = (gmctx->board)[m.from - 1];
 	(gmctx->board)[m.from - 1] = ' ';
+
+	return true;
 }
 
 /*
@@ -562,12 +584,10 @@ parse_cmd(GameCtx *gmctx, char cmd[6], bool *error) {
 			char buffer[3];
 			uint8_t square = coord_to_square(cmd[1], cmd[2]-'0');
 
-			MoveList *available = NULL;
-			available_moves( gmctx, square, &available);
+			available_moves( gmctx, square );
 			printf("The available moves for the piece on square %d are: ", square);
-			movelist_print(available);
-			print_board_with_moves( gmctx->board, square, available);
-			movelist_free(&available);
+			movelist_print( gmctx->available_moves );
+			print_board_with_moves( gmctx->board, square, gmctx->available_moves );
 			
 		}
 		else if (ISDIGIT(cmd[1]) && ISDIGIT(cmd[2])){
@@ -578,12 +598,10 @@ parse_cmd(GameCtx *gmctx, char cmd[6], bool *error) {
 			int result = atoi(buffer);
 			if (result >= 1 && result <= 32) {
 				uint8_t square = (uint8_t)result;
-				MoveList *available = NULL;
-				available_moves( gmctx, square, &available);
+				available_moves( gmctx, square );
 				printf("The available moves for the piece on square %d are: ", square);
-				movelist_print(available);
-				print_board_with_moves( gmctx->board, square, available);
-				movelist_free(&available);
+				movelist_print( gmctx->available_moves );
+				print_board_with_moves( gmctx->board, square, gmctx->available_moves );
 			}
 		}
 		else {
@@ -743,6 +761,7 @@ main(int argc, char *argv[]){
 	char cmd[8];
 	
 	gmctx.movelist = NULL;
+	gmctx.available_moves = NULL;
 
 	while (!gmctx.quit){
 		putc('>',stdout);
@@ -751,8 +770,17 @@ main(int argc, char *argv[]){
 		bool error;
 		Move move = parse_cmd(&gmctx, cmd, &error);
 		if (!error && move.from){
-			do_move(&gmctx, move);
-			print_board(gmctx.board);
+
+			bool valid_move = do_move(&gmctx, move);
+
+			if (!valid_move)
+				printf("That move is invalid!\n");
+			else {
+
+				movelist_append( &(gmctx.movelist), move );
+				print_board(gmctx.board);
+
+			}
 		}
 		memset(cmd, 0, sizeof cmd);
 	}
