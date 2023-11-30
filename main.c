@@ -1,4 +1,6 @@
 // Note to self:
+// create a program using sokol (bit of a gui) that we can use to edit checkersboards
+// also: square 15 is sus - taking doesn't work on it
 // make sure the taking functionality works.
 // also, that it is forced.
 // and maybe gameloop, when that's done
@@ -93,6 +95,15 @@ const uint8_t ADJ_SQUARES[32][4] = {
 #define ANSI_CLEAR     "\033[0m"
 #define ANSI_YELLOW    "\033[30;103m"
 
+/* used to determine the next square when jumping */
+typedef
+enum {
+	NW,
+	NE,
+	SW,
+	SE,
+} DIRECTION;
+
 /* MOVELIST */
 #define MOVELIST_MALLOC ((MoveList *) malloc(sizeof(MoveList)))
 
@@ -103,6 +114,7 @@ struct {
 	uint8_t to;
 	uint8_t taken[16];
 	uint8_t taken_len;
+	DIRECTION direction;
 } Move;
 
 
@@ -153,15 +165,6 @@ struct {
 	bool quit;
 	uint8_t selected_piece;
 } GameCtx;
-
-/* used to determine the next square when jumping */
-typedef
-enum {
-	NW,
-	NE,
-	SW,
-	SE,
-} DIRECTION;
 
 /*
 	utility functions for the linked list
@@ -219,6 +222,17 @@ movelist_pop(MoveList **mvlstptr, bool *success) {
 
 	return m;
 
+}
+
+MoveList *
+movelist_last(MoveList **mvlstptr) {
+
+	MoveList *iter = *mvlstptr;
+
+	while (iter->next != NULL)
+		iter = iter->next;
+	
+	return iter;
 }
 
 // free all the memory acquired by the list
@@ -452,7 +466,6 @@ void
 recursive_take(GameCtx *gmctx, uint8_t square, Move *m, DIRECTION d, bool dir_filter[4]){
 
 	uint8_t adj_squares[4];
-
 	FOURBYTECOPY(ADJ_SQUARES[square-1], adj_squares);
 
 	for ( int i = 0; i<4; ++i){
@@ -463,19 +476,10 @@ recursive_take(GameCtx *gmctx, uint8_t square, Move *m, DIRECTION d, bool dir_fi
 		// what square is adjacent to this one in 'i' direction?
 		uint8_t adj_square = adj_squares[i];
 
-		// if there is no square adjacent (we hit a corner) or if it's empty
+		// if there is no square adjacent (we hit a corner or edge) or if it's empty
 		// -> meaning we cannot take no mo
-		if (!adj_square || (gmctx->board)[adj_square-1] == ' ') return;/*{
-
-
-			printf("We cannot take no mo \n");
-			printf("With this move '%d' pieces will be taken off the board\n", m->taken_len);
-
-			if (m->taken_len == 1)
-				movelist_append(&(gmctx->available_moves), *m);
-
-			return;
-		}*/
+		// ???
+		if (!adj_square || (gmctx->board)[adj_square-1] == ' ') return;
 
 		// we can take!!
 		else if ((gmctx->board)[adj_square-1] != (gmctx->board)[square-1]){
@@ -488,11 +492,11 @@ recursive_take(GameCtx *gmctx, uint8_t square, Move *m, DIRECTION d, bool dir_fi
 				m->taken[(m->taken_len)-1] = adj_square;
 
 
-				if (d != i) {
+				if (m->direction != i) {
 					Move new_m;
 					move_copy(*m, &new_m);
 
-					recursive_take(gmctx, opp_sqr, &new_m, i, dir_filter );
+					recursive_take(gmctx, opp_sqr, &new_m, i, dir_filter);
 
 					new_m.to = opp_sqr;
 					movelist_append( &(gmctx->available_moves), new_m);
@@ -507,11 +511,6 @@ recursive_take(GameCtx *gmctx, uint8_t square, Move *m, DIRECTION d, bool dir_fi
 					
 				}
 
-			}
-
-			else {
-				m->to = square;
-				movelist_append(&(gmctx->available_moves), *m);
 			}
 		}
 	}
@@ -539,22 +538,27 @@ available_moves(GameCtx *gmctx, uint8_t square){
 
 	for (int i = 0; i<4; ++i){
 
-		if (!dir_filter[i] || !(adj_squares[i])) continue;
+		if (!(dir_filter[i]) || !(adj_squares[i])) continue;
 
 		if ((gmctx->board)[adj_squares[i]-1] == ' '){
 			m.from = square;
 			m.to = adj_squares[i];
+			m.direction = i;
 			movelist_append( &(gmctx->available_moves), m);
 		}
 		else if ((gmctx->board)[adj_squares[i]-1] != (gmctx->board)[square-1]){
 			uint8_t opp_sqr = OPPOSING_SQUARE(square, i);
 			if ((gmctx->board)[opp_sqr-1] == ' '){
 				m.from = square;
-				m.taken_len += 1;
-				m.taken[m.taken_len-1] = adj_squares[i];
+				m.direction = i;
+				// m.taken_len += 1;
+				// m.taken[m.taken_len-1] = adj_squares[i];
+
+				// movelist_append( &(gmctx->available_moves), m );
+				// MoveList *_last = movelist_last( &(gmctx->available_moves) );
 
 				// we recurse (plz don't smash the stack)
-				recursive_take(gmctx, opp_sqr, &m, i, dir_filter);
+				recursive_take(gmctx, square, &m, i, dir_filter);
 			}
 		}
 		for (int j = 0; j<m.taken_len; ++j)
