@@ -1,15 +1,13 @@
 // Note to self:
 // create a program using sokol (bit of a gui) that we can use to edit checkersboards
-// also: square 15 is sus - taking doesn't work on it
-// make sure the taking functionality works.
-// also, that it is forced.
-// and maybe gameloop, when that's done
+// make sure the taking functionality is forced -> wrote taking_avaialable -> maybe store the squares on which taking can occur
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
+#include <time.h>
 
 /* BITS */
 #define BIT(x) 		(1<<(x))
@@ -24,6 +22,14 @@
 #define ISUPPERCASE(x)  ( x >= 'A' && x <= 'Z' )
 
 /* GAME MACROS */
+
+#ifdef _WIN32
+	#define RANDINT(MAX) rand() % MAX + 1
+#else
+#ifdef __linux__
+	#define RANDINT(MAX) rand() % MAX + 1
+#endif
+#endif
 
 /*
 	returns the index of the square opposite to the one
@@ -93,6 +99,7 @@ const uint8_t ADJ_SQUARES[32][4] = {
 /* ANSI ESCAPE CODES */
 #define ANSI_HIGHLIGHT "\033[7m"
 #define ANSI_CLEAR     "\033[0m"
+#define ANSI_RED	   "\033[30;41m"
 #define ANSI_YELLOW    "\033[30;103m"
 
 /* used to determine the next square when jumping */
@@ -418,6 +425,22 @@ print_board_with_moves(char board[32], uint8_t square, MoveList *mvlstptr){
 				m.to = coord_to_square('a' + j, 8-i);
 				if (movelist_contains(mvlstptr, m, true))
 					printf(ANSI_YELLOW);
+				else {
+					MoveList *current = mvlstptr;
+					bool flag = false;
+					while (current != NULL && !flag) {
+
+					for ( int t = 0; t<current->value.taken_len; ++t ) {
+						if (current->value.taken[t] == m.to) {
+							printf(ANSI_RED);
+							flag = true;
+							break;
+						}
+					}
+					current = current->next;
+					
+					}
+				}
 				putc(board[k++], stdout);
 				printf(ANSI_CLEAR);
 			}
@@ -458,116 +481,98 @@ movelist_print(MoveList *mvlstptr) {
 	putc('\n', stdout);
 }
 
-/*
-	here's the meat: the --MOVES--
-*/
-
 void
-recursive_take(GameCtx *gmctx, uint8_t square, Move *m, DIRECTION d, bool dir_filter[4]){
-
-	uint8_t adj_squares[4];
-	FOURBYTECOPY(ADJ_SQUARES[square-1], adj_squares);
-
-	for ( int i = 0; i<4; ++i){
-
-		// can't go that way, try the next direction
-		if (!dir_filter[i]) continue;
-
-		// what square is adjacent to this one in 'i' direction?
-		uint8_t adj_square = adj_squares[i];
-
-		// if there is no square adjacent (we hit a corner or edge) or if it's empty
-		// -> meaning we cannot take no mo
-		// ???
-		if (!adj_square || (gmctx->board)[adj_square-1] == ' ') return;
-
-		// we can take!!
-		else if ((gmctx->board)[adj_square-1] != (gmctx->board)[square-1]){
-
-			uint8_t opp_sqr = OPPOSING_SQUARE(square, i);
-
-			if ((gmctx->board)[opp_sqr-1] == ' '){
-
-				m->taken_len += 1;
-				m->taken[(m->taken_len)-1] = adj_square;
-
-
-				if (m->direction != i) {
-					Move new_m;
-					move_copy(*m, &new_m);
-
-					recursive_take(gmctx, opp_sqr, &new_m, i, dir_filter);
-
-					new_m.to = opp_sqr;
-					movelist_append( &(gmctx->available_moves), new_m);
-
-				}
-				else {
-					// we recurse (plz don't smash the stack)
-					recursive_take(gmctx, opp_sqr, m, i, dir_filter);
-					
-					m->to = opp_sqr;
-					movelist_append( &(gmctx->available_moves), *m);
-					
-				}
-
-			}
-		}
-	}
-}
-
-void
-available_moves(GameCtx *gmctx, uint8_t square){
-	
-	/* | - this shouldn't need to be in here, we should've filtered this out by now
-	 * ˇ
-	if ((gmctx->board)[square-1] == ' ')
-		return;
-		
-	*/
+available_moves(GameCtx *gmctx, uint8_t square, bool jumping){
 
 	uint8_t adj_squares[4];
 	bool dir_filter[4];
 
 	FOURBYTECOPY(ADJ_SQUARES[square-1], adj_squares);
 
-	direction_filter(gmctx, square, dir_filter);
+	if (jumping)
+		// when jumping, the value of square is irrelevant in terms of directions checking
+		// we should rather get the last jump's "from" field
+		direction_filter(gmctx, movelist_last(&(gmctx->available_moves))->value.from, dir_filter);
+	else
+		direction_filter(gmctx, square, dir_filter);
 
-	Move m;
-    	m.taken_len = 0;
 
 	for (int i = 0; i<4; ++i){
 
-		if (!(dir_filter[i]) || !(adj_squares[i])) continue;
+		uint8_t neighbor = adj_squares[i];
 
-		if ((gmctx->board)[adj_squares[i]-1] == ' '){
+		if (!(dir_filter[i])) continue;
+
+		if (jumping && neighbor == 0) {
+			// reached end
+			MoveList* lst_mv = movelist_last(&(gmctx->available_moves));
+			lst_mv->value.to = square;
+			if (i == 3)
+				return;
+		}
+
+		else if (!jumping && (gmctx->board)[neighbor-1] == ' '){
+			// just add a simple move
+			Move m;
+			m.taken_len = 0;
 			m.from = square;
-			m.to = adj_squares[i];
+			m.to = neighbor;
 			m.direction = i;
 			movelist_append( &(gmctx->available_moves), m);
 		}
-		else if ((gmctx->board)[adj_squares[i]-1] != (gmctx->board)[square-1]){
-			uint8_t opp_sqr = OPPOSING_SQUARE(square, i);
-			if ((gmctx->board)[opp_sqr-1] == ' '){
-				m.from = square;
-				m.direction = i;
-				// m.taken_len += 1;
-				// m.taken[m.taken_len-1] = adj_squares[i];
 
-				// movelist_append( &(gmctx->available_moves), m );
-				// MoveList *_last = movelist_last( &(gmctx->available_moves) );
-
-				// we recurse (plz don't smash the stack)
-				recursive_take(gmctx, square, &m, i, dir_filter);
-			}
+		else if (jumping && ( (gmctx->board)[neighbor-1] == ' '
+						   || (gmctx->board)[neighbor-1] == (gmctx->board)[square-1] ) ) {
+			// cannot jump anymore
+			MoveList* lst_mv = movelist_last(&(gmctx->available_moves));
+			lst_mv->value.to = square;
+			if (i == 3)
+				return;
 		}
-		for (int j = 0; j<m.taken_len; ++j)
-			m.taken[j] = 0;
-		m.taken_len = 0;
+
+		else if ((gmctx->board)[neighbor-1] != (gmctx->board)[square-1]){
+
+			uint8_t opp_sqr = OPPOSING_SQUARE(square, i);
+
+			if ((gmctx->board)[opp_sqr-1] == ' '){
+
+				// everything is set for a good jump
+
+				if (!jumping) {
+					// create new move object the first time
+					Move m;
+					m.taken_len = 0;
+					m.from = square;
+					m.direction = i;
+					m.taken[m.taken_len++] = neighbor;
+					movelist_append( &(gmctx->available_moves), m);
+				}
+
+				else {
+					// every next call we just add to the list of taken pieces
+					MoveList* lst_mv = movelist_last(&(gmctx->available_moves));
+					lst_mv->value.taken[lst_mv->value.taken_len++] = neighbor;
+				}
+
+				available_moves(gmctx, opp_sqr, true);
+
+				if (jumping)
+					// otherwise we still need to check other directions
+					return;
+			}
+
+			else if (jumping) {
+				// we couldn't finish the jump
+				MoveList* lst_mv = movelist_last(&(gmctx->available_moves));
+				lst_mv->value.to = square;
+				if (i == 3)
+					return;
+			} 
+		}
 	}
 }
 
-// only select the piece, if the piece exists
+
 bool
 select_piece(GameCtx *gmctx, uint8_t square) {
 
@@ -576,7 +581,7 @@ select_piece(GameCtx *gmctx, uint8_t square) {
 	movelist_free(&(gmctx->available_moves));
 
 	gmctx->selected_piece = square;
-	available_moves(gmctx, square);
+	available_moves(gmctx, square, false);
 
 	return true;
 }
@@ -584,7 +589,10 @@ select_piece(GameCtx *gmctx, uint8_t square) {
 bool
 do_move(GameCtx *gmctx, Move m){
 
-	if (gmctx->selected_piece != m.from && !select_piece(gmctx, m.from))
+	if ( !select_piece(gmctx, m.from) )
+		return false;
+
+	if ( gmctx->selected_piece != m.from )
 		return false;
 
 	if ( !movelist_contains(gmctx->available_moves, m, true) )
@@ -610,6 +618,31 @@ setup_board(char board[32]){
 	for (i = 20; i<32; ++i)
 		board[i] = 'w';
 	putc('\n', stdout);
+}
+
+bool
+taking_available(GameCtx *ctx, char color) {
+
+	for ( uint8_t i = 0; i<32; ++i) {
+		if ( ( ctx->board[i] | 32 ) == color ) {
+
+			select_piece(ctx, i);
+
+			if (movelist_len(ctx->available_moves) == 0) continue; 
+
+			MoveList *mvptr = ctx->available_moves;
+
+			while (mvptr != NULL) {
+
+				if (mvptr->value.taken_len > 0)
+					return true;
+				mvptr = mvptr->next;
+
+			}
+		}
+	}
+	
+	return false;
 }
 
 /*
@@ -832,14 +865,63 @@ parse_cmd(GameCtx *gmctx, char cmd[6], bool *error) {
 
 }
 
+// AI
+void
+ai_random_move( GameCtx *ctx ) {
+
+	int ran_i, j;
+	MoveList *mvptr;
+	bool has_to_take = taking_available(ctx, 'b');
+
+	// choose random piece
+	bool chosen = false;
+	while (!chosen) {
+		ran_i = RANDINT(12);
+		printf("Random number: %d\n", ran_i);
+		uint8_t square;
+		j = 0;
+		for ( int i = 0; i<32; ++i) {
+			if ( ctx->board[i] == 'b' || ctx->board[i] == 'B' ) {
+				j++;
+				if (j == ran_i) {
+					square = i+1;
+					break;
+				}
+			}
+		}
+		if (!select_piece(ctx, square));
+		mvptr = ctx->available_moves;
+		if (movelist_len(mvptr) > 0) chosen = true;
+	}
+
+	ran_i = RANDINT(movelist_len(ctx->available_moves));
+
+	j = 0;
+	while (mvptr->next != NULL && j<ran_i) {
+		mvptr = mvptr->next;
+		j++;
+	}
+
+	do_move(ctx, mvptr->value);
+	movelist_append(&(ctx->movelist), mvptr->value);
+}
+
 int
 main(int argc, char *argv[]){
+
+	#ifdef _WIN32
+		srand((unsigned int)time(NULL));
+	#else
+	#ifdef __linux__
+		srand((unsigned int)time(NULL));
+	#endif
+	#endif
 
 	GameCtx gmctx;
 
 	uint8_t neighbors[4];
 	setup_board(gmctx.board);
-	print_board(gmctx.board);
+	// print_board(gmctx.board);
 	char cmd[8];
 	
 	gmctx.movelist = NULL;
@@ -847,27 +929,37 @@ main(int argc, char *argv[]){
 
 	gmctx.selected_piece = 0;
 
+	bool player = 1;
+
 	while (!gmctx.quit){
 
-		putc('>',stdout);
-		scanf("%7[^\n]", cmd);
-		getchar();
-		bool error;
-		Move move = parse_cmd(&gmctx, cmd, &error);
-		if (!error && move.from){
+		if (player) {
+			print_board(gmctx.board);
+			putc('>',stdout);
+			scanf("%7[^\n]", cmd);
+			getchar();
+			bool error;
+			Move move = parse_cmd(&gmctx, cmd, &error);
+			if (!error && move.from){
 
-			bool valid_move = do_move(&gmctx, move);
+				bool valid_move = do_move(&gmctx, move);
 
-			if (!valid_move)
-				printf("That move is invalid!\n");
-			else {
+				if (!valid_move)
+					printf("That move is invalid!\n");
+				else {
 
-				movelist_append( &(gmctx.movelist), move );
-				print_board(gmctx.board);
+					movelist_append( &(gmctx.movelist), move );
+					player = 0;
 
+				}
 			}
+			memset(cmd, 0, sizeof cmd);
 		}
-		memset(cmd, 0, sizeof cmd);
+		else {
+			ai_random_move(&gmctx);
+			print_board(gmctx.board);
+			player = 1;
+		}
 	}
 
 	movelist_print(gmctx.movelist);
