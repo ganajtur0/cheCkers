@@ -1,6 +1,6 @@
 // Note to self:
 // create a program using sokol (bit of a gui) that we can use to edit checkersboards
-// make sure the taking functionality is forced -> wrote taking_avaialable -> maybe store the squares on which taking can occur
+// modify MoveList : give it **head**
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,13 +8,6 @@
 #include <string.h>
 #include <stdbool.h>
 #include <time.h>
-
-/* BITS */
-#define BIT(x) 		(1<<(x))
-#define SETBIT(x,p) 	((x)|(1<<(p)))
-#define CLEARBIT(x,p)	((x)&(~(1<<(p))))
-#define BITSET(x,p)	((x)&(1<<(p)))
-#define TOGGLEBIT(x,p)	((x)^(1<<(p)))
 
 /* ASCII */
 #define ISDIGIT(x)	('1' <= x && x <= '8')
@@ -166,9 +159,12 @@ struct movelist {
 typedef
 struct {
 	char board[32];
+	bool player;
 	char last_turn;
 	MoveList *movelist;
 	MoveList *available_moves;
+	int movelist_len;
+	int available_moves_len;
 	bool quit;
 	uint8_t selected_piece;
 } GameCtx;
@@ -178,7 +174,7 @@ struct {
 */
 // add an element to the end of the list
 void
-movelist_append(MoveList **mvlstptr, Move m){
+movelist_append(MoveList **mvlstptr, Move m, int *length){
 	if (*mvlstptr == NULL) {
 		(*mvlstptr) = MOVELIST_MALLOC;
 		(*mvlstptr)->value = m;
@@ -196,6 +192,7 @@ movelist_append(MoveList **mvlstptr, Move m){
 			ptr->next->value.taken[i] = m.taken[i];
 		ptr->next->next  = NULL;
 	}
+	*length += 1;
 }
 
 // pop an element off the end of the list
@@ -244,7 +241,7 @@ movelist_last(MoveList **mvlstptr) {
 
 // free all the memory acquired by the list
 void
-movelist_free(MoveList **mvlstptr){
+movelist_free(MoveList **mvlstptr, int *length){
 
 	if ( (*mvlstptr) == NULL ) return;
 
@@ -256,11 +253,14 @@ movelist_free(MoveList **mvlstptr){
 		prev = (*mvlstptr);
 	} while ( (*mvlstptr) != NULL );
 
+	*length = 0;
+	*mvlstptr = NULL;
+
 }
 
 // returns the length of the list
 int
-movelist_len(MoveList *mvlstptr){
+movelist_length(MoveList *mvlstptr){
 
 	int len = 0;
 
@@ -482,7 +482,7 @@ movelist_print(MoveList *mvlstptr) {
 }
 
 void
-available_moves(GameCtx *gmctx, uint8_t square, bool jumping){
+available_moves(GameCtx *gmctx, uint8_t square, bool jumping, bool must_take){
 
 	uint8_t adj_squares[4];
 	bool dir_filter[4];
@@ -490,7 +490,7 @@ available_moves(GameCtx *gmctx, uint8_t square, bool jumping){
 	FOURBYTECOPY(ADJ_SQUARES[square-1], adj_squares);
 
 	if (jumping)
-		// when jumping, the value of square is irrelevant in terms of directions checking
+		// when jumping, the value of square is irrelevant
 		// we should rather get the last jump's "from" field
 		direction_filter(gmctx, movelist_last(&(gmctx->available_moves))->value.from, dir_filter);
 	else
@@ -501,6 +501,7 @@ available_moves(GameCtx *gmctx, uint8_t square, bool jumping){
 
 		uint8_t neighbor = adj_squares[i];
 
+		// not allowed to go that way
 		if (!(dir_filter[i])) continue;
 
 		if (jumping && neighbor == 0) {
@@ -512,13 +513,16 @@ available_moves(GameCtx *gmctx, uint8_t square, bool jumping){
 		}
 
 		else if (!jumping && (gmctx->board)[neighbor-1] == ' '){
+
+			if (must_take) continue;
+
 			// just add a simple move
 			Move m;
 			m.taken_len = 0;
 			m.from = square;
 			m.to = neighbor;
 			m.direction = i;
-			movelist_append( &(gmctx->available_moves), m);
+			movelist_append( &(gmctx->available_moves), m, &(gmctx->available_moves_len));
 		}
 
 		else if (jumping && ( (gmctx->board)[neighbor-1] == ' '
@@ -545,7 +549,7 @@ available_moves(GameCtx *gmctx, uint8_t square, bool jumping){
 					m.from = square;
 					m.direction = i;
 					m.taken[m.taken_len++] = neighbor;
-					movelist_append( &(gmctx->available_moves), m);
+					movelist_append( &(gmctx->available_moves), m, &(gmctx->available_moves_len));
 				}
 
 				else {
@@ -554,7 +558,7 @@ available_moves(GameCtx *gmctx, uint8_t square, bool jumping){
 					lst_mv->value.taken[lst_mv->value.taken_len++] = neighbor;
 				}
 
-				available_moves(gmctx, opp_sqr, true);
+				available_moves(gmctx, opp_sqr, true, must_take);
 
 				if (jumping)
 					// otherwise we still need to check other directions
@@ -572,35 +576,58 @@ available_moves(GameCtx *gmctx, uint8_t square, bool jumping){
 	}
 }
 
+// checks all pieces of "color" and checks if
+// there are any moves that result in taking with
+// setting the must_take argument of available_moves true
+bool
+taking_available(GameCtx *ctx, char color) {
 
+	for ( uint8_t i = 0; i<32; ++i) {
+		if ( ( ctx->board[i] | 32 ) == color ) {
+
+			movelist_free(&(ctx->available_moves), &(ctx->available_moves_len));
+			available_moves(ctx, i+1, false, true);
+
+			if (ctx->available_moves_len > 0) return true;
+		}
+	}
+	
+	return false;
+}
+
+// if there is no piece, returns false
+// otherwise computes the available moves and stores them in the context
 bool
 select_piece(GameCtx *gmctx, uint8_t square) {
 
-	if ( (gmctx->board)[square-1] == ' ' ) return false;
+	char color = (gmctx->board)[square-1];
 
-	movelist_free(&(gmctx->available_moves));
+	if ( color == ' ' ) return false;
 
 	gmctx->selected_piece = square;
-	available_moves(gmctx, square, false);
+	bool has_to_take = taking_available(gmctx, color|32);
+	available_moves(gmctx, square, false, has_to_take);
 
 	return true;
 }
 
+// this saves the move
+// then executes it (if it's correct)
 bool
 do_move(GameCtx *gmctx, Move m){
 
-	if ( !select_piece(gmctx, m.from) )
+	if ( !select_piece(gmctx, m.from)    ||
+		 gmctx->selected_piece != m.from ||
+		 !movelist_contains(gmctx->available_moves, m, true) )
 		return false;
 
-	if ( gmctx->selected_piece != m.from )
-		return false;
+	movelist_append(&(gmctx->movelist), m, &(gmctx->movelist_len));
 
-	if ( !movelist_contains(gmctx->available_moves, m, true) )
-		return false;
-
-	movelist_append(&(gmctx->movelist), m);
 	(gmctx->board)[m.to - 1] = (gmctx->board)[m.from - 1];
 	(gmctx->board)[m.from - 1] = ' ';
+
+	for (int i = 0; i<m.taken_len; ++i)
+		(gmctx->board)[m.taken[i] - 1] = ' ';
 
 	return true;
 }
@@ -620,30 +647,6 @@ setup_board(char board[32]){
 	putc('\n', stdout);
 }
 
-bool
-taking_available(GameCtx *ctx, char color) {
-
-	for ( uint8_t i = 0; i<32; ++i) {
-		if ( ( ctx->board[i] | 32 ) == color ) {
-
-			select_piece(ctx, i);
-
-			if (movelist_len(ctx->available_moves) == 0) continue; 
-
-			MoveList *mvptr = ctx->available_moves;
-
-			while (mvptr != NULL) {
-
-				if (mvptr->value.taken_len > 0)
-					return true;
-				mvptr = mvptr->next;
-
-			}
-		}
-	}
-	
-	return false;
-}
 
 /*
 	parsing the commands
@@ -676,7 +679,7 @@ parse_cmd(GameCtx *gmctx, char cmd[6], bool *error) {
 
 	if (cmd[0] == 'q') {
 		printf("Quitting\n");
-		movelist_free(&(gmctx->movelist));
+		movelist_free(&(gmctx->movelist), &(gmctx->movelist_len));
 		gmctx->quit = true;
 		move.from = 0;
 		return move;
@@ -688,7 +691,8 @@ parse_cmd(GameCtx *gmctx, char cmd[6], bool *error) {
 			char buffer[3];
 			uint8_t square = coord_to_square(cmd[1], cmd[2]-'0');
 
-			if (!select_piece(gmctx, square)) printf("You cannot select that square!\n");
+			if (!select_piece(gmctx, square))
+				printf("You cannot select that square!\n");
 
 			else {
 
@@ -708,7 +712,8 @@ parse_cmd(GameCtx *gmctx, char cmd[6], bool *error) {
 			if (result >= 1 && result <= 32) {
 				uint8_t square = (uint8_t)result;
 
-				if (!select_piece(gmctx, square)) printf("You cannot select that square!\n");
+				if (!select_piece(gmctx, square))
+					printf("You cannot select that square!\n");
 
 				else {
 
@@ -869,15 +874,15 @@ parse_cmd(GameCtx *gmctx, char cmd[6], bool *error) {
 void
 ai_random_move( GameCtx *ctx ) {
 
+	printf("AI move debug\n");
+
 	int ran_i, j;
 	MoveList *mvptr;
-	bool has_to_take = taking_available(ctx, 'b');
 
 	// choose random piece
 	bool chosen = false;
 	while (!chosen) {
 		ran_i = RANDINT(12);
-		printf("Random number: %d\n", ran_i);
 		uint8_t square;
 		j = 0;
 		for ( int i = 0; i<32; ++i) {
@@ -889,12 +894,17 @@ ai_random_move( GameCtx *ctx ) {
 				}
 			}
 		}
-		if (!select_piece(ctx, square));
-		mvptr = ctx->available_moves;
-		if (movelist_len(mvptr) > 0) chosen = true;
+		select_piece(ctx, square);
+		printf("Selected piece on square %d\n", square);
+
+		if (ctx->available_moves_len > 0) chosen = true;
+
+		
 	}
 
-	ran_i = RANDINT(movelist_len(ctx->available_moves));
+	mvptr = ctx->available_moves;
+
+	ran_i = RANDINT(ctx->available_moves_len);
 
 	j = 0;
 	while (mvptr->next != NULL && j<ran_i) {
@@ -902,8 +912,11 @@ ai_random_move( GameCtx *ctx ) {
 		j++;
 	}
 
+	printf("chosen move: ");
+	move_print(mvptr->value);
+	putchar('\n');
 	do_move(ctx, mvptr->value);
-	movelist_append(&(ctx->movelist), mvptr->value);
+	movelist_append(&(ctx->movelist), mvptr->value, &(ctx->movelist_len));
 }
 
 int
@@ -921,19 +934,20 @@ main(int argc, char *argv[]){
 
 	uint8_t neighbors[4];
 	setup_board(gmctx.board);
-	// print_board(gmctx.board);
 	char cmd[8];
 	
 	gmctx.movelist = NULL;
+	gmctx.movelist_len = 0;
 	gmctx.available_moves = NULL;
+	gmctx.available_moves_len = 0;
 
 	gmctx.selected_piece = 0;
 
-	bool player = 1;
+	gmctx.player = true;
 
 	while (!gmctx.quit){
 
-		if (player) {
+		if (gmctx.player) {
 			print_board(gmctx.board);
 			putc('>',stdout);
 			scanf("%7[^\n]", cmd);
@@ -948,8 +962,8 @@ main(int argc, char *argv[]){
 					printf("That move is invalid!\n");
 				else {
 
-					movelist_append( &(gmctx.movelist), move );
-					player = 0;
+					movelist_append( &(gmctx.movelist), move, &(gmctx.movelist_len) );
+					gmctx.player = false;
 
 				}
 			}
@@ -957,13 +971,12 @@ main(int argc, char *argv[]){
 		}
 		else {
 			ai_random_move(&gmctx);
-			print_board(gmctx.board);
-			player = 1;
+			gmctx.player = true;
 		}
 	}
 
 	movelist_print(gmctx.movelist);
-	movelist_free(&(gmctx.movelist));
+	movelist_free(&(gmctx.movelist), &(gmctx.movelist_len));
 
 	return 0;
 }
